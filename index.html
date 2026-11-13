@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>COLVEN · Seguimiento de Equipos y Mantenimiento</title>
+  <meta name="description" content="Dashboard gerencial de seguimiento de órdenes de mantenimiento, operaciones, materiales críticos y anticipos.">
+  <link rel="icon" type="image/png" href="assets/img/logo-colven.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar__inner">
+      <img class="topbar__logo" src="assets/img/logo-colven.png" alt="COLVEN Business Corp.">
+      <div class="topbar__title">
+        <p class="eyebrow">Reporte gerencial</p>
+        <h1>Seguimiento de Equipos y Mantenimiento</h1>
+        <p class="topbar__meta" id="dataMeta">Cargando datos…</p>
+      </div>
+      <div class="topbar__actions">
+        <a class="btn btn--primary" id="btnDownload" href="#" download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
+          Descargar Excel
+        </a>
+        <label class="btn btn--ghost" title="Visualiza otro archivo con la misma estructura (solo en tu navegador, no modifica la página publicada)">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9m0 0-5 5m5-5 5 5M4 3h16"/></svg>
+          Cargar Excel
+          <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xls" hidden>
+        </label>
+        <button class="btn btn--ghost btn--icon" id="btnPrint" title="Imprimir / guardar PDF" aria-label="Imprimir">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg>
+        </button>
+      </div>
+    </div>
+    <nav class="tabs" id="tabs" aria-label="Secciones">
+      <a href="#resumen" data-tab="resumen" class="tab is-active">Resumen general</a>
+      <a href="#mtto" data-tab="mtto" class="tab">Mantenimiento</a>
+      <a href="#oper" data-tab="oper" class="tab">Operaciones</a>
+      <a href="#mat" data-tab="mat" class="tab">Materiales críticos</a>
+      <a href="#rq" data-tab="rq" class="tab">Anticipos y montos</a>
+    </nav>
+  </header>
+
+  <div id="localBanner" class="banner" hidden></div>
+
+  <main class="container">
+    <section id="view-resumen" class="view is-active"></section>
+    <section id="view-mtto" class="view"></section>
+    <section id="view-oper" class="view"></section>
+    <section id="view-mat" class="view"></section>
+    <section id="view-rq" class="view"></section>
+  </main>
+
+  <footer class="footer">
+    <span>COLVEN Business Corp. · Seguimiento de Equipos y Mantenimiento</span>
+    <span id="footerSource"></span>
+  </footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="assets/js/config.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>
