@@ -13,6 +13,10 @@ window.DASHBOARD_CONFIG = {
   // Días desde la emisión de la orden a partir de los cuales se marca como "antigua"
   agingAlertDays: 45,
 
+  // Contraseña del botón "Cargar Excel" guardada como huella SHA-256 (no en texto plano).
+  // Para cambiarla, calcula el SHA-256 de la nueva contraseña y pégalo aquí.
+  uploadPasswordHash: '5f4ca1d191439bfc60e03bb3cff02c1a6b482ea27b8efac1e7485903811b35ad',
+
   // Cómo identificar cada hoja (por nombre). Si no coincide, se usa el orden de las hojas visibles.
   sheets: {
     mtto: /mtto|manten/i,

@@ -25,11 +25,11 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>
           Descargar Excel
         </a>
-        <label class="btn btn--ghost" title="Visualiza otro archivo con la misma estructura (solo en tu navegador, no modifica la página publicada)">
+        <button type="button" class="btn btn--ghost" data-upload title="Cargar un Excel con la misma estructura (requiere contraseña)">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V9m0 0-5 5m5-5 5 5M4 3h16"/></svg>
           Cargar Excel
-          <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xls" hidden>
-        </label>
+        </button>
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm,.xls" hidden>
         <button class="btn btn--ghost btn--icon" id="btnPrint" title="Imprimir / guardar PDF" aria-label="Imprimir">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z"/></svg>
         </button>
@@ -53,6 +53,22 @@
     <section id="view-mat" class="view"></section>
     <section id="view-rq" class="view"></section>
   </main>
+
+  <div class="modal" id="pwModal" hidden>
+    <div class="modal__card" role="dialog" aria-modal="true" aria-labelledby="pwTitle">
+      <div class="modal__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></div>
+      <h3 id="pwTitle">Cargar Excel</h3>
+      <p>Ingresa la contraseña para cargar un archivo de datos.</p>
+      <form id="pwForm" autocomplete="off">
+        <input type="password" id="pwInput" placeholder="Contraseña" aria-label="Contraseña">
+        <p class="modal__err" id="pwErr" hidden>Contraseña incorrecta. Inténtalo de nuevo.</p>
+        <div class="modal__actions">
+          <button type="button" class="btn btn--light" id="pwCancel">Cancelar</button>
+          <button type="submit" class="btn btn--primary">Continuar</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <footer class="footer">
     <span>COLVEN Business Corp. · Seguimiento de Equipos y Mantenimiento</span>

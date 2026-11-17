@@ -11,9 +11,16 @@ Reporte gerencial estático (HTML + JavaScript) que lee directamente el Excel
 | **Materiales críticos** | `Materiales Criticos` | Inventario y niveles mínimo/máximo (muestra un aviso si aún está vacía) |
 | **Anticipos y montos** | `RQ (2)` | Monto total, anticipos, saldo por pagar e incidencias |
 
-La primera vista de cada sección es un resumen. El detalle completo (tabla con
-búsqueda, filtros y orden por columna) se abre con **“Ver detalle completo”**,
-o haciendo clic en una barra de los gráficos o en un punto de atención.
+La primera vista de cada sección es un resumen. Todo es interactivo:
+
+- **Cada cuadro (KPI o tarjeta de segmento)** abre justo debajo un panel de detalle
+  con indicadores, gráficos y la tabla de los registros que componen ese número.
+  Un segundo clic (o la ✕) lo cierra. Algunos paneles traen un botón para
+  **filtrar la tabla** o **abrir la sección** correspondiente.
+- **Barras de los gráficos** de estado, prioridad y responsables filtran la tabla de detalle.
+- **Ver detalle completo** abre la tabla con búsqueda, filtros y orden por columna.
+  Los gráficos **Tipo de orden y región** y **Principales proveedores** (y los de
+  Anticipos) se ajustan a esos filtros y muestran la etiqueta *Filtrado · N de M*.
 
 ---
 
@@ -43,9 +50,21 @@ o haciendo clic en una barra de los gráficos o en un punto de atención.
 
 > Si prefieres otro nombre de archivo, cámbialo en `assets/js/config.js` (`dataFile`).
 
-### Botón “Cargar Excel”
-Permite **previsualizar** cualquier Excel con la misma estructura sin publicarlo.
-El cambio es solo en el navegador de quien lo carga; no modifica la página publicada.
+### Botón “Cargar Excel” (con contraseña)
+Pide una contraseña y luego permite **previsualizar** cualquier Excel con la misma
+estructura. El cambio es solo en el navegador de quien lo carga; **no modifica la
+página publicada** (eso solo se hace subiendo el archivo a `data/`, paso anterior).
+Tras ingresarla bien, no se vuelve a pedir hasta cerrar la pestaña.
+
+- La contraseña se guarda en `assets/js/config.js` como huella **SHA-256**, no en texto plano.
+- Para cambiarla, calcula el SHA-256 de la nueva (en PowerShell):
+  ```powershell
+  $b=[Text.Encoding]::UTF8.GetBytes('NuevaClave'); ([Security.Cryptography.SHA256]::Create().ComputeHash($b) | % { $_.ToString('x2') }) -join ''
+  ```
+  y pega el resultado en `uploadPasswordHash`.
+- ⚠️ Es una protección básica de una página estática: evita cargas casuales, pero no
+  sustituye un control de acceso real. Los datos publicados siguen siendo visibles para
+  quien tenga el enlace.
 
 ## 3. Reglas y supuestos
 
