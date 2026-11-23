@@ -45,11 +45,12 @@
   const clean = s => String(s ?? '').replace(/\s+/g, ' ').trim();
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmtInt = n => new Intl.NumberFormat('es-VE').format(n || 0);
-  const fmtMoney = n => new Intl.NumberFormat('es-VE', { style: 'currency', currency: CFG.currency, maximumFractionDigits: 0 }).format(n || 0);
+  // Montos en una sola pieza: "$343.839" / "$343,8 K" (espacio no separable para que nunca se corte la línea)
+  const fmtMoney = n => (n < 0 ? '-$' : '$') + new Intl.NumberFormat('es-VE', { maximumFractionDigits: 0 }).format(Math.abs(Math.round(n || 0)));
   const fmtMoneyShort = n => {
     const a = Math.abs(n || 0);
-    if (a >= 1e6) return '$' + (n / 1e6).toFixed(1).replace('.', ',') + ' M';
-    if (a >= 1e3) return '$' + (n / 1e3).toFixed(1).replace('.', ',') + ' K';
+    if (a >= 1e6) return '$' + (n / 1e6).toFixed(1).replace('.', ',') + ' M';
+    if (a >= 1e3) return '$' + (n / 1e3).toFixed(1).replace('.', ',') + ' K';
     return '$' + Math.round(n || 0);
   };
   const pct = (a, b) => b ? Math.round((a / b) * 100) : 0;
@@ -890,7 +891,7 @@
     const segCard = (key, tag, big, bigLabel, s1, s2, progress) => `
       <div class="card seg" data-drill="seg-${key}" role="button" tabindex="0" aria-label="${tag}: ver detalle">
         <div class="seg__top"><span class="seg__tag">${tag}</span><span class="seg__icon"><svg viewBox="0 0 24 24">${ICONS[key]}</svg></span></div>
-        <div class="seg__big">${big}<small>${bigLabel}</small></div>
+        <div class="seg__big"><span class="seg__num">${big}</span><small>${bigLabel}</small></div>
         ${progress !== undefined ? `<div class="bar" title="${progress}% con orden emitida"><span style="width:${progress}%"></span></div>` : ''}
         <div class="seg__stats">${s1}${s2}</div>
         <span class="seg__link">Ver detalle ${CHEV}</span>
@@ -906,7 +907,7 @@
       segCard('mat', 'Materiales críticos', fmtInt(d.mat.items.length), 'materiales',
         stat('mat-bajo', d.mat.ix && d.mat.ix.stock >= 0 ? fmtInt(d.mat.items.filter(x => x.bajoMinimo).length) : '—', 'bajo mínimo'),
         stat('mat-campos', fmtInt(d.mat.headers.length), 'campos de control')),
-      segCard('rq', 'Anticipos y montos', fmtMoneyShort(montoTot), 'comprometido',
+      segCard('rq', 'Anticipos y montos', fmtMoneyShort(montoTot), 'total',
         stat('rq-ant', fmtMoneyShort(antTot), 'anticipos'),
         stat('rq-incid', fmtInt(d.rq.items.filter(x => x.incidencia).length), 'con incidencia')),
       segCard('pag', 'Pagos requeridos', fmtMoneyShort(pgPagar), 'por pagar',

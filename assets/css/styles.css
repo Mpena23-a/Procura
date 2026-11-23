@@ -140,7 +140,7 @@ a { color: inherit; }
 .kpi.risk::before { background: var(--risk); }
 .kpi.ok::before { background: var(--ok); }
 .kpi__label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
-.kpi__value { font-family: var(--font-head); font-size: 30px; font-weight: 700; line-height: 1.15; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.kpi__value { font-family: var(--font-head); font-size: 30px; font-weight: 700; line-height: 1.15; margin: 6px 0 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kpi__hint { color: var(--muted); font-size: 12.5px; }
 
 /* Segment cards (resumen) */
@@ -150,8 +150,10 @@ a { color: inherit; }
 .seg__tag { font-size: 11px; font-weight: 700; letter-spacing: .12em; color: var(--navy-3); text-transform: uppercase; }
 .seg__icon { width: 34px; height: 34px; border-radius: 9px; background: var(--navy); display: grid; place-items: center; }
 .seg__icon svg { width: 18px; height: 18px; stroke: var(--yellow); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.seg__big { font-family: var(--font-head); font-size: 34px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
-.seg__big small { font-size: 13px; font-weight: 500; color: var(--muted); font-family: var(--font-body); margin-left: 6px; }
+.seg { container-type: inline-size; }
+.seg__big { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; font-family: var(--font-head); font-size: 28px; font-size: min(28px, 14cqw); font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; min-width: 0; }
+.seg__num { white-space: nowrap; flex-shrink: 0; }
+.seg__big small { font-size: 12px; font-weight: 500; color: var(--muted); font-family: var(--font-body); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .seg__stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
 .seg__stats div { font-size: 12px; color: var(--muted); }
 .seg__stats b { display: block; color: var(--ink); font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -279,7 +281,7 @@ button.card { font: inherit; color: inherit; text-align: left; width: 100%; disp
 .drill__stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
 .drill__stats div { background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 8px 14px; min-width: 110px; }
 .drill__stats span { display: block; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
-.drill__stats b { font-family: var(--font-head); font-size: 18px; font-variant-numeric: tabular-nums; }
+.drill__stats b { font-family: var(--font-head); font-size: 18px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .drill__charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 16px; margin-bottom: 14px; }
 .drill__chart { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
 .drill__chart h4 { font: 600 13px var(--font-body); color: var(--muted); margin: 0 0 8px; }
