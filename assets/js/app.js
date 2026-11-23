@@ -7,7 +7,7 @@
 
   const CFG = window.DASHBOARD_CONFIG;
   const $ = (s, el = document) => el.querySelector(s);
-  const VIEWS = ['resumen', 'mtto', 'oper', 'mat', 'rq'];
+  const VIEWS = ['resumen', 'mtto', 'oper', 'mat', 'rq', 'pag'];
 
   const charts = {};       // id -> instancia Chart.js
   let builders = {};       // vista -> función que crea sus gráficos (se ejecuta al abrir la vista)
@@ -16,6 +16,7 @@
   let openDrill = {};      // slot -> id del cuadro abierto
   let drillSpecs = {};     // slot -> especificación abierta (para su botón de acción)
   const tableState = {};   // filtros y orden por segmento
+  const provMode = {};     // modo del gráfico de proveedores por segmento: 'count' | 'monto'
   let DATA = null;
   let downloadUrl = null;
   let curView = null;
@@ -139,18 +140,39 @@
     return 0;
   }
 
+  function headersOf(ws) {
+    const rows = sheetRows(ws);
+    return (rows[findHeaderRow(rows)] || []).map(norm).filter(Boolean);
+  }
   function pickSheets(wb) {
     const hidden = new Set(((wb.Workbook || {}).Sheets || []).filter(s => s.Hidden).map(s => s.name));
     const visible = wb.SheetNames.filter(n => !hidden.has(n));
+    const hdr = {};
+    visible.forEach(n => { hdr[n] = headersOf(wb.Sheets[n]); });
+    const isPagos = n => hdr[n].some(c => c.includes('por pagar') || c.includes('total requerido'));
     const out = {}, used = new Set();
-    for (const key of ['mtto', 'oper', 'mat', 'rq']) {
-      const name = visible.find(n => !used.has(n) && CFG.sheets[key].test(n));
+    for (const key of ['mtto', 'oper', 'mat', 'rq', 'pag']) {
+      const name = visible.find(n => !used.has(n) && CFG.sheets[key] && CFG.sheets[key].test(n));
       if (name) { out[key] = name; used.add(name); }
     }
-    const rest = visible.filter(n => !used.has(n));
+    if (!out.pag) { const n = visible.find(x => !used.has(x) && isPagos(x)); if (n) { out.pag = n; used.add(n); } }
+    // respaldo por posición, solo con hojas que parezcan de datos (no listas auxiliares)
+    const rest = visible.filter(n => !used.has(n) && !isPagos(n) && hdr[n].some(c => /orden|solicitud|material/.test(c)));
     for (const key of ['mtto', 'oper', 'mat', 'rq']) if (!out[key] && rest.length) out[key] = rest.shift();
     return out;
   }
+  const toNum = v => {
+    if (typeof v === 'number') return v;
+    const s = String(v ?? '').trim();
+    if (!s) return null;
+    const n = parseFloat(s.replace(/[^\d,.-]/g, '').replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  };
+  const toPct = v => {
+    if (typeof v === 'number') return v > 1 ? v / 100 : v;
+    if (/^\s*\d+([.,]\d+)?\s*%?\s*$/.test(String(v ?? ''))) { let p = parseFloat(String(v).replace(',', '.')); if (p > 1) p /= 100; return p; }
+    return null;
+  };
 
   function parseOrders(ws, segLabel) {
     const rows = sheetRows(ws);
@@ -160,8 +182,10 @@
     const f = t => h.findIndex(t);
     const ix = {
       no: f(c => /^no\.?$/.test(c)),
-      orden: f(c => c.includes('orden') && !c.includes('fecha')),
+      orden: f(c => c.includes('orden') && !c.includes('fecha') && !c.includes('monto')),
       solicitud: f(c => c === 'solicitud' || c === 'descripcion'),
+      monto: f(c => c.includes('monto')),
+      pct: f(c => c.includes('anticipo') || c.includes('%')),
       empresa: f(c => c.includes('empresa') || c.includes('proveedor')),
       tipo: f(c => c.includes('tipo')),
       prioridad: f(c => c.includes('prioridad')),
@@ -181,7 +205,11 @@
       if (!tipo && hasOrder) tipo = orden.slice(0, 3).toUpperCase();
       const coment = clean(get(r, 'coment'));
       const fSol = toDate(get(r, 'fSol')), fEm = toDate(get(r, 'fEm'));
+      const monto = toNum(get(r, 'monto'));
+      const pctA = monto !== null ? toPct(get(r, 'pct')) : null;
       const x = {
+        monto, pct: pctA, anticipo: monto !== null && pctA !== null ? monto * pctA : 0,
+        saldo: monto !== null ? monto - (pctA !== null ? monto * pctA : 0) : 0, incidencia: '',
         seg: segLabel, no: get(r, 'no'), orden, solicitud, empresa, tipo: tipo || 'Sin definir',
         prioridad: titleCase(clean(get(r, 'prioridad'))) || 'Sin definir', fSol, fEm,
         owner: clean(get(r, 'owner')) || 'Sin asignar', procura: clean(get(r, 'procura')) || 'Sin asignar',
@@ -191,8 +219,47 @@
       x._txt = norm([x.orden, x.solicitud, x.empresa, x.coment, x.owner, x.procura].join(' '));
       items.push(x);
     }
-    return { items, ownerLabel: ix.owner >= 0 ? rawH[ix.owner] : 'Encargado' };
+    return { items, ownerLabel: ix.owner >= 0 ? rawH[ix.owner] : 'Encargado', hasMonto: items.some(x => x.monto) };
   }
+
+  // Hoja de pagos requeridos (No. De Orden, Solicitud, Empresa, Total requerido, % Anticipo, Monto por pagar, Comentarios)
+  function parsePagos(ws, ordIndex) {
+    const rows = sheetRows(ws);
+    const hi = findHeaderRow(rows) || rows.findIndex(r => r.map(norm).some(c => c.includes('por pagar') || c.includes('requerido')));
+    const h = (rows[Math.max(hi, 0)] || []).map(norm);
+    const f = t => h.findIndex(t);
+    const ix = {
+      orden: f(c => c.includes('orden')), solicitud: f(c => c === 'solicitud' || c.includes('descripcion')),
+      empresa: f(c => c.includes('empresa') || c.includes('proveedor')),
+      total: f(c => c.includes('requerido') || (c.includes('total') && !c.includes('pagar'))),
+      pct: f(c => c.includes('%') || c.includes('anticipo')), pagar: f(c => c.includes('pagar')),
+      coment: f(c => c.includes('comentario') || c.includes('observ'))
+    };
+    const get = (r, k) => ix[k] >= 0 ? r[ix[k]] : '';
+    const items = [];
+    for (const r of rows.slice(Math.max(hi, 0) + 1)) {
+      const orden = clean(get(r, 'orden')), solicitud = clean(get(r, 'solicitud')), empresa = clean(get(r, 'empresa'));
+      if (!orden && !solicitud && !empresa) continue;
+      const total = toNum(get(r, 'total')) || 0;
+      const p = toPct(get(r, 'pct'));
+      let pagar = toNum(get(r, 'pagar'));
+      if (pagar === null) pagar = total;
+      const match = orden ? ordIndex[orden.toUpperCase()] : null;
+      const x = {
+        orden, solicitud, empresa: empresa || 'Sin empresa', total, pct: p, pagar, coment: clean(get(r, 'coment')),
+        condicion: p === null ? 'Sin definir' : p >= 1 ? 'Anticipo 100%' : p > 0 ? 'Anticipo parcial' : 'Sin anticipo (crédito)',
+        seg: match ? match.seg : (orden ? 'No registrada' : 'Sin orden'), estado: match ? match.estado : '',
+        region: region(orden, solicitud)
+      };
+      x._txt = norm([x.orden, x.solicitud, x.empresa, x.coment, x.seg].join(' '));
+      items.push(x);
+    }
+    return { items };
+  }
+  const CONDICIONES = [
+    { key: 'Anticipo 100%', color: '#D9534F' }, { key: 'Anticipo parcial', color: '#E3A92B' },
+    { key: 'Sin anticipo (crédito)', color: '#1D2041' }, { key: 'Sin definir', color: '#C9CCDD' }
+  ];
 
   function parsePayments(ws) {
     const rows = sheetRows(ws);
@@ -252,12 +319,15 @@
 
   function processWorkbook(wb, meta) {
     const names = pickSheets(wb);
+    const mtto = names.mtto ? parseOrders(wb.Sheets[names.mtto], 'Mantenimiento') : { items: [], ownerLabel: 'Encargado' };
+    const oper = names.oper ? parseOrders(wb.Sheets[names.oper], 'Operaciones') : { items: [], ownerLabel: 'Encargado' };
+    const ordIndex = {};
+    [...mtto.items, ...oper.items].forEach(x => { if (x.orden) ordIndex[x.orden.toUpperCase()] = x; });
     return {
-      meta, sheetNames: names,
-      mtto: names.mtto ? parseOrders(wb.Sheets[names.mtto], 'Mantenimiento') : { items: [], ownerLabel: 'Encargado' },
-      oper: names.oper ? parseOrders(wb.Sheets[names.oper], 'Operaciones') : { items: [], ownerLabel: 'Encargado' },
+      meta, sheetNames: names, mtto, oper,
       mat: names.mat ? parseMaterials(wb.Sheets[names.mat]) : { items: [], headers: [], ix: {} },
       rq: names.rq ? parsePayments(wb.Sheets[names.rq]) : { items: [] },
+      pag: names.pag ? parsePagos(wb.Sheets[names.pag], ordIndex) : { items: [] },
       modified: (wb.Props && (wb.Props.ModifiedDate || wb.Props.CreatedDate)) || null
     };
   }
@@ -455,6 +525,8 @@
       { t: 'Empresa', f: x => esc(x.empresa) || dash, cls: 'mid' },
       { t: 'Tipo', f: x => esc(x.tipo), cls: 'nowrap' },
       { t: 'Prioridad', f: x => prioBadge(x.prioridad) },
+      { t: 'Monto', f: x => x.monto !== null ? fmtMoney(x.monto) : dash, cls: 'num' },
+      { t: '% Anticipo', f: x => x.pct !== null ? Math.round(x.pct * 100) + '%' : dash, cls: 'num' },
       { t: 'Estado (estimado)', f: x => estadoBadge(x.estado) },
       { t: 'Emisión', f: x => fmtDate(x.fEm) || (x.fSol ? `<span class="muted">Sol. ${fmtDate(x.fSol)}</span>` : dash), cls: 'nowrap' },
       { t: 'Días', f: x => x.dias ?? dash, cls: 'num' },
@@ -484,6 +556,7 @@
       { l: 'Con orden', v: fmtInt(items.filter(x => x.hasOrder).length) },
       { l: 'Prioridad alta', v: fmtInt(items.filter(x => x.prioridad === 'Alta').length) }
     ];
+    if (!o.stats && items.some(x => x.monto)) spec.stats.push({ l: 'Monto', v: fmtMoneyShort(sumBy(items, x => x.monto)) });
     spec.charts = o.charts || [{ t: 'Por estado', cfg: estadoCfg(items) }, { t: 'Por responsable de Procura', cfg: countCfg(items, x => x.procura) }];
     spec.table = { cols: orderCols({ seg: o.showSeg }), rows: o.rows || items };
     return spec;
@@ -592,6 +665,7 @@
     destroyCharts('');
     builders = {}; built = {}; drills = {}; openDrill = {}; drillSpecs = {};
     for (const k of Object.keys(tableState)) delete tableState[k];
+    for (const k of Object.keys(provMode)) delete provMode[k];
 
     const mod = d.meta.lastModified ? new Date(d.meta.lastModified) : (d.modified ? new Date(d.modified) : null);
     const modTxt = mod && !isNaN(mod) ? mod.toLocaleString('es-VE', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -607,6 +681,7 @@
     renderOrders('oper', 'Operaciones', d.oper, 'Órdenes de servicio y compra solicitadas por el área de Operaciones.');
     renderMaterials(d.mat);
     renderPayments(d.rq);
+    renderPagos(d.pag);
     curView = null;
     route();
   }
@@ -621,7 +696,8 @@
     mtto: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z"/>',
     oper: '<path d="M3 21h18M5 21V9l7-5 7 5v12M9 21v-6h6v6"/>',
     mat: '<path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/>',
-    rq: '<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>'
+    rq: '<path d="M12 2v20M17 6H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    pag: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>'
   };
 
   function detailBlock(key, count, inner) {
@@ -673,6 +749,19 @@
         action: { label: 'Filtrar tabla', seg: key, filter: { estado: 'Entrega pendiente' } }
       });
     };
+    drills[`${key}-monto`] = () => {
+      const r = it.filter(x => x.monto).sort((a, b) => b.monto - a.monto);
+      const tot = sumBy(r, x => x.monto), ant = sumBy(r, x => x.anticipo);
+      const top = r.slice(0, 12);
+      return ordersDrill(`Monto de las órdenes · ${L}`, `Monto de cada orden y anticipo según el % acordado${r.length > 12 ? ' · el gráfico muestra las 12 de mayor monto' : ''}`, r, {
+        stats: r.length ? [
+          { l: 'Monto total', v: fmtMoney(tot) }, { l: 'Anticipos', v: `${fmtMoney(ant)} · ${pct(ant, tot)}%` },
+          { l: 'Saldo', v: fmtMoney(tot - ant) }, { l: 'Órdenes con monto', v: fmtInt(r.length) }
+        ] : null,
+        charts: [{ t: 'Anticipo vs. saldo por orden', cfg: payStackCfg(top), rows: top }, { t: 'Monto por proveedor', cfg: provDonutCfg(r), h: 320 }],
+        emptyMsg: 'No hay montos registrados en esta hoja.'
+      });
+    };
     drills[`${key}-edad`] = () => {
       const r = it.filter(x => x.hasOrder && x.fEm && ABIERTO(x.estado)).sort((a, b) => b.dias - a.dias);
       const U = CFG.agingAlertDays;
@@ -720,7 +809,23 @@
       const r = ord.filter(x => x.prioridad === 'Alta' && ABIERTO(x.estado));
       return ordersDrill('Prioridad alta abiertas', 'Solicitudes de prioridad Alta que no están completadas ni canalizadas', r, { showSeg: true });
     };
-    drills['res-monto'] = () => paymentsDrill('Monto comprometido', 'Órdenes con requerimiento de anticipo', rq, 'monto', { label: 'Abrir sección', seg: 'rq' });
+    drills['res-monto'] = () => {
+      const r = ord.filter(x => x.monto).sort((a, b) => b.monto - a.monto);
+      if (!r.length) return paymentsDrill('Monto comprometido', 'Órdenes con requerimiento de anticipo', rq, 'monto', { label: 'Abrir sección', seg: 'rq' });
+      const tot = sumBy(r, x => x.monto), ant = sumBy(r, x => x.anticipo), top = r.slice(0, 12);
+      const segs = ['Mantenimiento', 'Operaciones'];
+      return ordersDrill('Monto en órdenes', `Mantenimiento + Operaciones${r.length > 12 ? ' · el gráfico de barras muestra las 12 órdenes de mayor monto' : ''}`, r, {
+        showSeg: true,
+        stats: [
+          { l: 'Monto total', v: fmtMoney(tot) }, { l: 'Anticipos', v: `${fmtMoney(ant)} · ${pct(ant, tot)}%` },
+          { l: 'Saldo', v: fmtMoney(tot - ant) }, { l: 'Órdenes con monto', v: fmtInt(r.length) }
+        ],
+        charts: [
+          { t: 'Anticipo vs. saldo por orden', cfg: payStackCfg(top), rows: top },
+          { t: 'Monto por segmento', cfg: donut(segs, segs.map(s => sumBy(r.filter(x => x.seg === s), x => x.monto)), [C.navy, C.yellow], { money: true }), h: 300 }
+        ]
+      });
+    };
 
     // Tarjetas de segmento
     drills['seg-mtto'] = () => ordersDrill('Mantenimiento', 'Resumen del segmento', d.mtto.items, { action: { label: 'Abrir sección', seg: 'mtto' } });
@@ -738,6 +843,23 @@
       if (r.length) spec.stats = [{ l: 'Registros', v: fmtInt(r.length) }, { l: 'Monto afectado', v: fmtMoney(sumBy(r, x => x.monto)) }, ...r.slice(0, 3).map(x => ({ l: x.orden, v: esc(x.incidencia) }))];
       return spec;
     };
+
+    // Pagos requeridos
+    const pg = d.pag.items;
+    drills['seg-pag'] = () => pagosDrill('Pagos requeridos', 'Resumen del segmento', pg, { action: { label: 'Abrir sección', seg: 'pag' } });
+    drills['pag-total'] = () => pagosDrill('Total requerido', 'Monto total de cada requerimiento y su distribución por proveedor', pg, {
+      chartVal: 'total', second: 'prov'
+    });
+    drills['pag-pagar'] = () => pagosDrill('Monto por pagar', 'Monto pendiente de pago según la condición acordada', pg);
+    drills['pag-100'] = () => pagosDrill('Requieren anticipo del 100%', 'Pagos que deben cubrirse completos antes de la entrega o el inicio', pg.filter(x => x.condicion === 'Anticipo 100%'), {
+      second: 'prov', action: { label: 'Filtrar tabla', seg: 'pag', filter: { condicion: 'Anticipo 100%' } }
+    });
+    drills['pag-credito'] = () => pagosDrill('Sin anticipo (crédito)', 'Pagos con 0% de anticipo, normalmente a 30 días', pg.filter(x => x.condicion === 'Sin anticipo (crédito)'), {
+      second: 'prov', action: { label: 'Filtrar tabla', seg: 'pag', filter: { condicion: 'Sin anticipo (crédito)' } }
+    });
+    drills['pag-sinorden'] = () => pagosDrill('Sin orden en el seguimiento', 'Pagos sin número de orden o cuya orden no aparece en las hojas de Mantenimiento/Operaciones', pg.filter(x => x.seg === 'Sin orden' || x.seg === 'No registrada'), {
+      second: 'prov', emptyMsg: 'Todos los pagos están asociados a una orden del seguimiento.'
+    });
 
     // Materiales
     drills['mat-total'] = () => materialsDrill('Materiales registrados', 'Listado completo de la hoja de materiales críticos', d.mat.items);
@@ -759,6 +881,9 @@
     const conOrden = ord.filter(x => x.hasOrder).length;
     const alta = ord.filter(x => x.prioridad === 'Alta' && ABIERTO(x.estado)).length;
     const montoTot = sumBy(d.rq.items, x => x.monto), antTot = sumBy(d.rq.items, x => x.anticipo);
+    const ordMonto = sumBy(ord, x => x.monto), ordAnt = sumBy(ord, x => x.anticipo);
+    const useOrd = ordMonto > 0;
+    const pg = d.pag.items, pgPagar = sumBy(pg, x => x.pagar);
     const abiertas = ord.filter(x => ABIERTO(x.estado)).length;
 
     const stat = (id, v, l) => `<button type="button" class="seg__stat" data-drill="${id}"><b>${v}</b>${l}</button>`;
@@ -783,7 +908,10 @@
         stat('mat-campos', fmtInt(d.mat.headers.length), 'campos de control')),
       segCard('rq', 'Anticipos y montos', fmtMoneyShort(montoTot), 'comprometido',
         stat('rq-ant', fmtMoneyShort(antTot), 'anticipos'),
-        stat('rq-incid', fmtInt(d.rq.items.filter(x => x.incidencia).length), 'con incidencia'))
+        stat('rq-incid', fmtInt(d.rq.items.filter(x => x.incidencia).length), 'con incidencia')),
+      segCard('pag', 'Pagos requeridos', fmtMoneyShort(pgPagar), 'por pagar',
+        stat('pag-total', fmtInt(pg.length), plural(pg.length, 'pago', 'pagos')),
+        stat('pag-100', fmtInt(pg.filter(x => x.condicion === 'Anticipo 100%').length), 'con anticipo 100%'))
     ].join('');
 
     // Puntos de atención
@@ -798,6 +926,7 @@
     if (viejas.length) alerts.push({ c: C.navy3, n: viejas.length, t: `${plural(viejas.length, 'orden abierta', 'órdenes abiertas')} con más de ${CFG.agingAlertDays} días desde su emisión`, s: 'Revisar avance con proveedores', go: { seg: viejas.filter(x => m.includes(x)).length >= viejas.length / 2 ? 'mtto' : 'oper', filter: { aging: true } } });
     const inc = d.rq.items.filter(x => x.incidencia);
     if (inc.length) alerts.push({ c: C.risk, n: inc.length, t: plural(inc.length, 'anticipo con incidencia reportada', 'anticipos con incidencia reportada'), s: inc.map(x => x.incidencia).slice(0, 2).join(' · '), go: { seg: 'rq', openDetail: true } });
+    if (pg.length) alerts.push({ c: C.gold, n: fmtMoneyShort(pgPagar), t: `por pagar en ${pg.length} ${plural(pg.length, 'pago requerido', 'pagos requeridos')}`, s: `${pg.filter(x => x.condicion === 'Anticipo 100%').length} requieren anticipo del 100%`, go: { seg: 'pag', openDetail: true } });
     if (!d.mat.items.length) alerts.push({ c: '#C9CCDD', n: '—', t: 'Materiales críticos sin registros cargados', s: 'La hoja existe pero aún no tiene información', go: { seg: 'mat' } });
 
     $('#view-resumen').innerHTML = `
@@ -808,7 +937,8 @@
         ${kpi('Solicitudes registradas', fmtInt(ord.length), `${fmtInt(abiertas)} abiertas · Mantenimiento + Operaciones`, '', 'res-total')}
         ${kpi('Órdenes emitidas', pct(conOrden, ord.length) + '%', `${fmtInt(conOrden)} de ${fmtInt(ord.length)} con número de orden`, 'accent', 'res-emitidas')}
         ${kpi('Prioridad alta abiertas', fmtInt(alta), 'Requieren seguimiento cercano', 'risk', 'res-alta')}
-        ${kpi('Monto comprometido', fmtMoneyShort(montoTot), `${fmtMoneyShort(antTot)} en anticipos (${pct(antTot, montoTot)}%)`, 'ok', 'res-monto')}
+        ${useOrd ? kpi('Monto en órdenes', fmtMoneyShort(ordMonto), `${fmtMoneyShort(ordAnt)} en anticipos (${pct(ordAnt, ordMonto)}%)`, 'ok', 'res-monto')
+                 : kpi('Monto comprometido', fmtMoneyShort(montoTot), `${fmtMoneyShort(antTot)} en anticipos (${pct(antTot, montoTot)}%)`, 'ok', 'res-monto')}
       </div>
       <div class="drill" id="drill-res-kpi"></div>
       <div class="grid cols-4" data-slot="res-seg">${segs}</div>
@@ -865,6 +995,7 @@
   /* ---------------- Segmentos de órdenes (MTTO / OPER) ---------------- */
   function defaultState(key) {
     if (key === 'rq') return { search: '', sort: 'monto', dir: -1 };
+    if (key === 'pag') return { search: '', condicion: '', seg: '', sort: 'pagar', dir: -1 };
     return { search: '', estado: '', prioridad: '', owner: '', tipo: '', orden: '', sort: null, dir: 1, aging: false };
   }
   const isFiltered = st => !!(st.search || st.estado || st.prioridad || st.owner || st.tipo || st.orden || st.aging);
@@ -887,10 +1018,16 @@
     const tipos = [...new Set(rows.map(x => x.tipo))].sort();
     return { labels: tipos, series: regs.map(r => tipos.map(t => rows.filter(x => x.tipo === t && x.region === r).length)) };
   }
-  function provData(rows) {
-    const m = countBy(rows.filter(x => x.empresa), x => x.empresa);
-    const top = Object.keys(m).sort((a, b) => m[b] - m[a] || a.localeCompare(b)).slice(0, 8);
+  function provData(rows, mode) {
+    const m = {};
+    rows.filter(x => x.empresa).forEach(x => { m[x.empresa] = (m[x.empresa] || 0) + (mode === 'monto' ? (x.monto || 0) : 1); });
+    const top = Object.keys(m).filter(k => m[k] > 0).sort((a, b) => m[b] - m[a] || a.localeCompare(b)).slice(0, 8);
     return { top, values: top.map(k => m[k]) };
+  }
+  function applyProvMode(pc) {
+    const money = pc.$mode === 'monto';
+    pc.options.scales.x.ticks = money ? { callback: v => fmtMoneyShort(v) } : { precision: 0 };
+    pc.data.datasets[0].backgroundColor = money ? C.gold : C.navy;
   }
 
   function updateFilteredCharts(key, rows) {
@@ -907,8 +1044,9 @@
     }
     const pc = charts[`ch-${key}-prov`];
     if (pc) {
-      const d = provData(rows);
+      const d = provData(rows, pc.$mode);
       pc.$top = d.top;
+      applyProvMode(pc);
       pc.data.labels = d.top.map(t => short(t, 28));
       pc.data.datasets[0].data = d.values;
       pc.update();
@@ -941,6 +1079,7 @@
         ${hasPrio ? kpi('Prioridad alta', fmtInt(alta.length), `${pct(alta.length, it.length)}% de las solicitudes`, 'risk', `${key}-alta`)
                   : kpi('Por aprobación', fmtInt(it.filter(x => x.estado === 'Por aprobación').length), 'En espera de firma', 'risk', `${key}-aprob`)}
         ${kpi('Antigüedad promedio', edadProm !== null ? edadProm + ' días' : '—', edadProm !== null ? 'Órdenes abiertas, desde su emisión' : 'Sin fechas de emisión registradas', 'ok', `${key}-edad`)}
+        ${seg.hasMonto ? kpi('Monto de órdenes', fmtMoneyShort(sumBy(it, x => x.monto)), `${fmtMoneyShort(sumBy(it, x => x.anticipo))} en anticipos · ${it.filter(x => x.monto).length} con monto`, 'accent', `${key}-monto`) : ''}
       </div>
       <div class="drill" id="drill-${key}-kpi"></div>
       <div class="grid ${hasOwner ? 'cols-3eq' : 'cols-2'}">
@@ -951,7 +1090,9 @@
       <div class="grid cols-2">
         <div class="card"><h3>Tipo de orden y región ${fltTag}</h3><p class="sub">ODS = servicio · ODC = compra · se ajusta a los filtros del detalle</p>
           <div class="chart-box"><canvas id="ch-${key}-tipo"></canvas><div class="chart-empty" id="ce-${key}-tipo" hidden>Sin datos con los filtros aplicados</div></div></div>
-        <div class="card"><h3>Principales proveedores ${fltTag}</h3><p class="sub">Número de órdenes por empresa · se ajusta a los filtros del detalle</p>
+        <div class="card"><div class="card-head"><h3>Principales proveedores ${fltTag}</h3>
+          ${seg.hasMonto ? `<div class="seg-toggle" data-prov-toggle="${key}"><button type="button" data-mode="count" class="is-on">Órdenes</button><button type="button" data-mode="monto">Monto</button></div>` : ''}</div>
+          <p class="sub" id="prov-sub-${key}">Número de órdenes por empresa · se ajusta a los filtros del detalle</p>
           <div class="chart-box"><canvas id="ch-${key}-prov"></canvas><div class="chart-empty" id="ce-${key}-prov" hidden>Sin proveedores con los filtros aplicados</div></div></div>
       </div>
       ${detailBlock(key, it.length, `
@@ -1004,19 +1145,33 @@
       });
       tc.$regs = regs;
 
-      const pd = provData(rows);
+      const mode = provMode[key] || 'count';
+      const pd = provData(rows, mode);
       const pc = makeChart(`ch-${key}-prov`, {
         type: 'bar',
         data: { labels: pd.top.map(t => short(t, 28)), datasets: [{ data: pd.values, backgroundColor: C.navy, borderRadius: 6, maxBarThickness: 24 }] },
         options: {
           indexAxis: 'y', maintainAspectRatio: false,
-          plugins: { legend: { display: false }, tooltip: { callbacks: { title: i => i[0].chart.$top[i[0].dataIndex] } } },
+          plugins: { legend: { display: false }, tooltip: { callbacks: {
+            title: i => i[0].chart.$top[i[0].dataIndex],
+            label: c => c.chart.$mode === 'monto' ? fmtMoney(c.raw) : `${c.raw} ${plural(c.raw, 'orden', 'órdenes')}`
+          } } },
           scales: { x: { grid: { color: C.line }, ticks: { precision: 0 } }, y: { grid: { display: false }, ticks: { autoSkip: false } } }
         }
       });
       pc.$top = pd.top;
+      pc.$mode = mode;
       updateFilteredCharts(key, rows);
     };
+
+    const tog = $(`[data-prov-toggle="${key}"]`);
+    if (tog) tog.querySelectorAll('button').forEach(b => b.onclick = () => {
+      provMode[key] = b.dataset.mode;
+      tog.querySelectorAll('button').forEach(x => x.classList.toggle('is-on', x === b));
+      $(`#prov-sub-${key}`).textContent = (b.dataset.mode === 'monto' ? 'Monto de órdenes (USD) por empresa' : 'Número de órdenes por empresa') + ' · se ajusta a los filtros del detalle';
+      const pc = charts[`ch-${key}-prov`];
+      if (pc) { pc.$mode = b.dataset.mode; updateFilteredCharts(key, filteredRows(key)); }
+    });
   }
 
   function setFilter(key, f) {
@@ -1042,6 +1197,7 @@
 
   function refreshTable(key) {
     if (key === 'rq') return refreshPayTable();
+    if (key === 'pag') return refreshPagTable();
     if (key === 'mat' || !DATA[key] || !DATA[key].items.length) return;
     const seg = DATA[key];
     const st = tableState[key] || (tableState[key] = defaultState(key));
@@ -1055,13 +1211,16 @@
       { k: 'empresa', t: 'Empresa', f: x => esc(x.empresa) || dash, cls: 'mid' },
       { k: 'tipo', t: 'Tipo', f: x => esc(x.tipo), cls: 'nowrap' },
       { k: 'prioridad', t: 'Prioridad', f: x => prioBadge(x.prioridad), sortVal: x => ({ Alta: 0, Media: 1, Baja: 2 }[x.prioridad] ?? 3) },
+      { k: 'monto', t: 'Monto', f: x => x.monto !== null ? fmtMoney(x.monto) : dash, cls: 'num', sortVal: x => x.monto ?? -1 },
+      { k: 'pct', t: '% Anticipo', f: x => x.pct !== null ? Math.round(x.pct * 100) + '%' : dash, cls: 'num', sortVal: x => x.pct ?? -1 },
       { k: 'estado', t: 'Estado (estimado)', f: x => estadoBadge(x.estado) },
       { k: 'fEm', t: 'Emisión', f: x => fmtDate(x.fEm) || (x.fSol ? `<span class="muted">Sol. ${fmtDate(x.fSol)}</span>` : dash), cls: 'nowrap', sortVal: x => (x.fEm || x.fSol) ? (x.fEm || x.fSol).getTime() : 0 },
       { k: 'dias', t: 'Días', f: x => x.dias ?? dash, cls: 'num', sortVal: x => x.dias ?? -1 },
       { k: 'owner', t: seg.ownerLabel.replace(/^Encargado\s*/i, 'Enc. '), f: x => esc(x.owner), cls: 'nowrap' },
       { k: 'procura', t: 'Enc. Procura', f: x => esc(x.procura), cls: 'nowrap' },
       { k: 'coment', t: 'Comentarios', f: x => esc(x.coment) || dash, cls: 'wide' }
-    ].filter(c => c.k !== 'prioridad' || seg.items.some(x => x.prioridad !== 'Sin definir'))
+    ].filter(c => (c.k !== 'monto' && c.k !== 'pct') || seg.hasMonto)
+     .filter(c => c.k !== 'prioridad' || seg.items.some(x => x.prioridad !== 'Sin definir'))
      .filter(c => c.k !== 'owner' || seg.items.some(x => x.owner !== 'Sin asignar'));
 
     if (st.sort) {
@@ -1212,6 +1371,167 @@
     $('#count-rq').textContent = `${rows.length} de ${it.length} registros`;
     tbl.querySelectorAll('th').forEach(th => th.onclick = () => { st.dir = st.sort === th.dataset.sort ? -st.dir : 1; st.sort = th.dataset.sort; refreshPayTable(); });
     updateRqCharts(rows);
+  }
+
+  /* ---------------- Pagos requeridos ---------------- */
+  const condColor = k => (CONDICIONES.find(c => c.key === k) || {}).color || '#ccc';
+  const condBadge = k => { const col = condColor(k); return `<span class="badge" style="background:${col};color:${col === '#C9CCDD' ? '#1D2041' : '#fff'}">${esc(k)}</span>`; };
+  const segText = x => x.estado ? `${esc(x.seg)}<br>${estadoBadge(x.estado)}` : `<span class="muted">${esc(x.seg)}</span>`;
+  const pagLabel = x => x.orden || short(x.solicitud, 26);
+  const pagCols = () => [
+    { k: 'orden', t: 'No. de orden', f: x => x.orden ? `<span class="mono">${esc(x.orden)}</span>` : '<span class="muted">Sin orden</span>', cls: 'nowrap' },
+    { k: 'seg', t: 'Segmento / estado', f: segText, cls: 'nowrap' },
+    { k: 'solicitud', t: 'Solicitud', f: x => esc(x.solicitud), cls: 'wide' },
+    { k: 'empresa', t: 'Empresa', f: x => esc(x.empresa), cls: 'mid' },
+    { k: 'total', t: 'Total requerido', f: x => fmtMoney(x.total), cls: 'num' },
+    { k: 'pct', t: '% Anticipo', f: x => x.pct !== null ? Math.round(x.pct * 100) + '%' : dash, cls: 'num', sortVal: x => x.pct ?? -1 },
+    { k: 'pagar', t: 'Monto por pagar', f: x => `<b>${fmtMoney(x.pagar)}</b>`, cls: 'num' },
+    { k: 'condicion', t: 'Condición', f: x => condBadge(x.condicion) },
+    { k: 'coment', t: 'Comentarios', f: x => esc(x.coment) || dash, cls: 'wide' }
+  ];
+  function pagOrdenCfg(rows, val = x => x.pagar) {
+    const s = rows.slice().sort((a, b) => val(b) - val(a));
+    return hbar(s.map(pagLabel), s.map(val), s.map(x => condColor(x.condicion)), { money: true });
+  }
+  function pagCondCfg(rows, val = x => x.pagar) {
+    const ks = CONDICIONES.map(c => c.key).filter(k => rows.some(x => x.condicion === k));
+    return donut(ks, ks.map(k => sumBy(rows.filter(x => x.condicion === k), val)), ks.map(condColor), { money: true });
+  }
+  function pagosDrill(title, sub, items, o = {}) {
+    const spec = { title, sub, count: items.length, action: o.action };
+    if (!items.length) { spec.empty = o.emptyMsg || 'No hay registros en esta categoría.'; return spec; }
+    const val = o.chartVal === 'total' ? (x => x.total) : (x => x.pagar);
+    spec.stats = [
+      { l: 'Total requerido', v: fmtMoney(sumBy(items, x => x.total)) },
+      { l: 'Monto por pagar', v: fmtMoney(sumBy(items, x => x.pagar)) },
+      { l: 'Pagos', v: fmtInt(items.length) },
+      { l: 'Anticipo 100%', v: fmtInt(items.filter(x => x.condicion === 'Anticipo 100%').length) }
+    ];
+    spec.charts = [
+      { t: o.chartVal === 'total' ? 'Total requerido por orden' : 'Monto por pagar por orden', cfg: pagOrdenCfg(items, val) },
+      o.second === 'prov'
+        ? { t: 'Por proveedor', cfg: provDonutCfg(items, val), h: 300 }
+        : { t: 'Por condición de pago', cfg: pagCondCfg(items, val), h: 260 }
+    ];
+    spec.table = { cols: pagCols(), rows: items.slice().sort((a, b) => b.pagar - a.pagar) };
+    return spec;
+  }
+
+  function filteredPag() {
+    const st = tableState.pag || (tableState.pag = defaultState('pag'));
+    const q = norm(st.search);
+    return DATA.pag.items.filter(x => (!q || x._txt.includes(q)) && (!st.condicion || x.condicion === st.condicion) && (!st.seg || x.seg === st.seg));
+  }
+
+  function renderPagos(seg) {
+    const v = $('#view-pag');
+    const it = seg.items;
+    tableState.pag = defaultState('pag');
+    const head = `<div class="section-head"><div><h2>Pagos requeridos</h2><p>Requerimientos de pago a proveedores: total requerido, % de anticipo y monto pendiente por pagar. Haz clic en cualquier cuadro para ver su detalle.</p></div></div>`;
+    if (!it.length) {
+      v.innerHTML = head + `<div class="empty"><h3>Sin registros</h3><p>No se encontró una hoja de pagos requeridos (con columnas “Total requerido” y “Monto por pagar”) en el Excel.</p></div>`;
+      return;
+    }
+    const tot = sumBy(it, x => x.total), pag = sumBy(it, x => x.pagar);
+    const p100 = it.filter(x => x.condicion === 'Anticipo 100%'), cred = it.filter(x => x.condicion === 'Sin anticipo (crédito)');
+    const sinOrd = it.filter(x => x.seg === 'Sin orden' || x.seg === 'No registrada');
+    const fltTag = '<span class="flt-tag" data-flt="pag" hidden></span>';
+    const segs = [...new Set(it.map(x => x.seg))];
+
+    v.innerHTML = head + `
+      <div class="grid kpis" data-slot="pag-kpi">
+        ${kpi('Total requerido', fmtMoney(tot), `${fmtInt(it.length)} ${plural(it.length, 'requerimiento', 'requerimientos')}`, '', 'pag-total')}
+        ${kpi('Monto por pagar', fmtMoney(pag), `${pct(pag, tot)}% del total requerido`, 'accent', 'pag-pagar')}
+        ${kpi('Anticipo 100%', fmtInt(p100.length), `${fmtMoney(sumBy(p100, x => x.pagar))} a pagar completo`, 'risk', 'pag-100')}
+        ${kpi('Sin anticipo (crédito)', fmtInt(cred.length), `${fmtMoney(sumBy(cred, x => x.pagar))} · pago a 30 días`, 'ok', 'pag-credito')}
+        ${kpi('Sin orden en el seguimiento', fmtInt(sinOrd.length), sinOrd.length ? `${fmtMoney(sumBy(sinOrd, x => x.pagar))} sin orden asociada` : 'Todos asociados a una orden', '', 'pag-sinorden')}
+      </div>
+      <div class="drill" id="drill-pag-kpi"></div>
+      <div class="grid cols-2">
+        <div class="card"><h3>Monto por pagar por orden ${fltTag}</h3><p class="sub">Color según la condición de pago · se ajusta a los filtros del detalle</p>
+          <div class="chart-box tall"><canvas id="ch-pag-orden"></canvas><div class="chart-empty" id="ce-pag-orden" hidden>Sin datos con los filtros aplicados</div></div></div>
+        <div class="card"><h3>Por condición de pago ${fltTag}</h3><p class="sub">Monto por pagar · clic en un sector para filtrar el detalle</p>
+          <div class="chart-box tall"><canvas id="ch-pag-cond"></canvas><div class="chart-empty" id="ce-pag-cond" hidden>Sin datos con los filtros aplicados</div></div></div>
+      </div>
+      ${detailBlock('pag', it.length, `
+        <div class="filters">
+          <input type="search" placeholder="Buscar por orden, solicitud, empresa o comentario…" data-f="search">
+          <select data-f="condicion"><option value="">Todas las condiciones</option>${CONDICIONES.filter(c => it.some(x => x.condicion === c.key)).map(c => `<option>${c.key}</option>`).join('')}</select>
+          <select data-f="seg"><option value="">Todos los segmentos</option>${segs.map(s => `<option>${esc(s)}</option>`).join('')}</select>
+          <button type="button" class="btn btn--light" data-reset>Limpiar</button>
+          <span class="count" id="count-pag"></span>
+        </div>
+        <div class="table-wrap"><table id="tbl-pag"></table></div>
+        <p class="note">“Segmento / estado” se obtiene cruzando el número de orden con las hojas de Mantenimiento y Operaciones.</p>`)}`;
+
+    const root = $('#detail-pag');
+    root.querySelector('[data-detail]').onclick = () => root.classList.toggle('is-open');
+    const onSearch = debounce(refreshPagTable, 150);
+    root.querySelectorAll('[data-f]').forEach(el => el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', () => {
+      tableState.pag[el.dataset.f] = el.value;
+      if (el.tagName === 'INPUT') onSearch(); else refreshPagTable();
+    }));
+    root.querySelector('[data-reset]').onclick = () => { tableState.pag = defaultState('pag'); refreshPagTable(); };
+    refreshPagTable();
+
+    builders.pag = () => {
+      const rows = filteredPag();
+      makeChart('ch-pag-orden', pagOrdenCfg(rows));
+      const cc = pagCondCfg(rows);
+      cc.options.onHover = pointer;
+      cc.options.onClick = (e, els, chart) => { if (els.length) setPagFilter({ condicion: chart.data.labels[els[0].index] }); };
+      makeChart('ch-pag-cond', cc);
+      updatePagCharts(rows);
+    };
+  }
+
+  function setPagFilter(f) { tableState.pag = Object.assign(defaultState('pag'), f); refreshPagTable(); openDetail('pag'); }
+
+  function updatePagCharts(rows) {
+    const st = tableState.pag || {};
+    const active = !!(st.search || st.condicion || st.seg);
+    document.querySelectorAll('[data-flt="pag"]').forEach(t => { t.hidden = !active; t.textContent = `Filtrado · ${rows.length} de ${DATA.pag.items.length}`; });
+    const c1 = charts['ch-pag-orden'], c2 = charts['ch-pag-cond'];
+    if (c1) {
+      const cfg = pagOrdenCfg(rows);
+      c1.data.labels = cfg.data.labels;
+      c1.data.datasets[0].data = cfg.data.datasets[0].data;
+      c1.data.datasets[0].backgroundColor = cfg.data.datasets[0].backgroundColor;
+      c1.options.plugins.tooltip.callbacks = cfg.options.plugins.tooltip.callbacks;
+      c1.update();
+      $('#ce-pag-orden').hidden = rows.length > 0;
+    }
+    if (c2) {
+      const cfg = pagCondCfg(rows);
+      c2.data.labels = cfg.data.labels;
+      c2.data.datasets[0].data = cfg.data.datasets[0].data;
+      c2.data.datasets[0].backgroundColor = cfg.data.datasets[0].backgroundColor;
+      c2.options.plugins.tooltip.callbacks = cfg.options.plugins.tooltip.callbacks;
+      c2.update();
+      $('#ce-pag-cond').hidden = rows.length > 0;
+    }
+  }
+
+  function refreshPagTable() {
+    if (!DATA || !DATA.pag.items.length) return;
+    const it = DATA.pag.items;
+    const st = tableState.pag || (tableState.pag = defaultState('pag'));
+    $('#detail-pag').querySelectorAll('[data-f]').forEach(el => { if (el.value !== (st[el.dataset.f] || '')) el.value = st[el.dataset.f] || ''; });
+    let rows = filteredPag();
+    const cols = pagCols();
+    if (st.sort) {
+      const c = cols.find(z => z.k === st.sort);
+      const val = c && c.sortVal ? c.sortVal : (x => typeof x[st.sort] === 'number' ? x[st.sort] : norm(x[st.sort]));
+      rows = rows.slice().sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * st.dir);
+    }
+    const tf = 'font-weight:700;background:#F3F4F8';
+    const tbl = $('#tbl-pag');
+    tbl.innerHTML = `<thead><tr>${cols.map(c => `<th data-sort="${c.k}">${esc(c.t)}<span class="sort">${st.sort === c.k ? (st.dir > 0 ? '▲' : '▼') : '↕'}</span></th>`).join('')}</tr></thead>
+      <tbody>${rows.map(x => `<tr>${cols.map(c => `<td class="${c.cls || ''}">${c.f(x)}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${cols.length}" class="muted" style="text-align:center;padding:24px">Sin resultados con los filtros aplicados</td></tr>`}
+      <tr><td colspan="4" style="${tf}">Total</td><td class="num" style="${tf}">${fmtMoney(sumBy(rows, x => x.total))}</td><td style="${tf}"></td><td class="num" style="${tf}">${fmtMoney(sumBy(rows, x => x.pagar))}</td><td colspan="2" style="${tf}"></td></tr></tbody>`;
+    $('#count-pag').textContent = `${rows.length} de ${it.length} registros`;
+    tbl.querySelectorAll('th').forEach(th => th.onclick = () => { st.dir = st.sort === th.dataset.sort ? -st.dir : 1; st.sort = th.dataset.sort; refreshPagTable(); });
+    updatePagCharts(rows);
   }
 
   /* ---------------- Navegación ---------------- */

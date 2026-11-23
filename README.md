@@ -10,6 +10,13 @@ Reporte gerencial estático (HTML + JavaScript) que lee directamente el Excel
 | **Operaciones** | `OPER` | Igual que Mantenimiento, con principales proveedores |
 | **Materiales críticos** | `Materiales Criticos` | Inventario y niveles mínimo/máximo (muestra un aviso si aún está vacía) |
 | **Anticipos y montos** | `RQ (2)` | Monto total, anticipos, saldo por pagar e incidencias |
+| **Pagos requeridos** | `Hoja1` (o la hoja con “Total requerido” / “Monto por pagar”) | Total requerido, monto por pagar, condición de pago (anticipo 100%, parcial o crédito) y cruce con el estado de la orden |
+
+En **Mantenimiento** y **Operaciones** se usan también las columnas **Monto de la orden**
+y **%Anticipo**: cuadro “Monto de órdenes”, columnas en la tabla y el gráfico de
+proveedores con selector **Órdenes / Monto**. Las columnas sin encabezado (M–P de MTTO)
+no se muestran; si deben aparecer, ponles un título en la fila 1.
+La hoja `Hoja4` (listas desplegables) se ignora aunque esté visible.
 
 La primera vista de cada sección es un resumen. Todo es interactivo:
 
@@ -83,6 +90,9 @@ Tras ingresarla bien, no se vuelve a pedir hasta cerrar la pestaña.
   si no hay orden, por la descripción.
 - **Antigüedad:** días desde la *Fecha de Emisión de la Orden* hasta hoy. El umbral de
   alerta (45 días) se ajusta en `assets/js/config.js`.
+- **Pagos requeridos:** se toma el *Monto por pagar* tal como viene del Excel (si está vacío, se usa el
+  *Total requerido*). Condición: 100% → “Anticipo 100%”, entre 1% y 99% → “Anticipo parcial”, 0% → “Sin anticipo (crédito)”.
+  El segmento y estado se obtienen buscando el No. de orden en MTTO/OPER.
 - **Anticipos:** `Anticipo = Monto × % Anticipo`. Si la columna % contiene texto
   (p. ej. “Factura retrasada”) se registra como **incidencia**.
 - Las filas que solo tienen el correlativo (No.) se ignoran. La hoja oculta `Hoja4` (listas) no se usa.

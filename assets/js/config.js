@@ -22,6 +22,9 @@ window.DASHBOARD_CONFIG = {
     mtto: /mtto|manten/i,
     oper: /oper/i,
     mat:  /material/i,
-    rq:   /^rq|anticip|monto/i
+    rq:   /^rq|anticip/i,
+    // Pagos requeridos: por nombre, o si no coincide, la hoja cuyos encabezados incluyan
+    // "Total requerido" o "Monto por pagar" (hoy se llama "Hoja1").
+    pag:  /pago|requerid/i
   }
 };

@@ -119,7 +119,11 @@ a { color: inherit; }
 .kpis { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-bottom: 16px; }
 .cols-2 { grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); margin-bottom: 16px; }
 .cols-3 { grid-template-columns: 2fr 1fr; margin-bottom: 16px; }
-.cols-4 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); margin-bottom: 16px; }
+.cols-4 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-bottom: 16px; }
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
+.seg-toggle { display: inline-flex; background: var(--soft); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
+.seg-toggle button { font: 600 12px var(--font-body); border: 0; background: none; color: var(--muted); padding: 5px 10px; border-radius: 7px; cursor: pointer; }
+.seg-toggle button.is-on { background: var(--navy); color: #fff; }
 
 .card {
   background: var(--card); border: 1px solid var(--line);
